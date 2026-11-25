@@ -572,6 +572,42 @@ fn first_charge_is_due_immediately_and_splits_fee() {
 }
 
 #[test]
+fn fee_recipient_receives_exact_fee_for_amount_and_rate_matrix() {
+    let cases = [
+        (100_i128, 0_u32),
+        (999, 1),
+        (999, 100),
+        (10_003, 333),
+        (123_456, 999),
+        (1_000_001, MAX_FEE_BPS),
+    ];
+
+    for (amount, fee_bps) in cases {
+        let w = world();
+        w.sub.set_fee_bps(&fee_bps);
+        let plan_id = w.plan_priced(amount);
+        let user = w.subscriber(amount);
+        let id = w.sub.subscribe(&user, &plan_id, &0, &0, &None::<Address>);
+        let fee_before = w.token_client.balance(&w.fee_to);
+        let merchant_before = w.token_client.balance(&w.merchant);
+        let expected_fee = amount * i128::from(fee_bps) / BPS_DENOMINATOR;
+
+        w.sub.charge(&w.keeper, &id);
+
+        assert_eq!(
+            w.token_client.balance(&w.fee_to) - fee_before,
+            expected_fee,
+            "fee recipient amount {amount} at {fee_bps} bps"
+        );
+        assert_eq!(
+            w.token_client.balance(&w.merchant) - merchant_before,
+            amount - expected_fee,
+            "merchant amount {amount} at {fee_bps} bps"
+        );
+    }
+}
+
+#[test]
 fn charge_settles_merchant_and_fee_through_one_vault_call() {
     let w = world();
     let plan_id = w.plan();
@@ -752,6 +788,7 @@ fn charge_requires_the_keeper_to_authorize() {
     assert!(w.sub.try_charge(&w.keeper, &id).is_err());
     assert_eq!(w.sub.get_mandate(&id).charges_made, 0);
     assert_eq!(w.token_client.balance(&w.keeper), 0);
+    assert_eq!(w.token_client.balance(&w.fee_to), 0);
 }
 
 #[test]
@@ -1992,6 +2029,7 @@ fn quote_chargeable_but_charge_fails_on_insufficient_balance() {
         w.sub.try_charge(&w.keeper, &id),
         Err(Ok(Error::VaultCallFailed))
     );
+    assert_eq!(w.token_client.balance(&w.fee_to), 0);
 
     // Mandate state unchanged.
     assert_eq!(w.sub.get_mandate(&id).charges_made, 0);
